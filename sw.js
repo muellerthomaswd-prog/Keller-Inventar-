@@ -4,7 +4,7 @@
  * nur die statischen Dateien (HTML/CSS/JS/Icons).
  */
 
-const CACHE_NAME = 'vorratskeller-v1';
+const CACHE_NAME = 'vorratskeller-v2';
 const APP_SHELL = [
   './',
   './index.html',
