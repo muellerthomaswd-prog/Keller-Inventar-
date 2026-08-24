@@ -5,22 +5,36 @@
 const listEl = document.getElementById('list');
 const subtitleEl = document.getElementById('subtitle');
 
+// IDs der aktuell aufgeklappten Artikel — bleibt über render()-Aufrufe hinweg erhalten,
+// damit ein Artikel nach +/- nicht wieder zuklappt.
+const expandedIds = new Set();
+
 // --- Rendering ---------------------------------------------------------
 
 async function render() {
   const items = await VorratsDB.getAll();
+  const sorted = sortItems(items);
 
-  if (items.length === 0) {
+  if (sorted.length === 0) {
     listEl.innerHTML = `<div class="empty-state">Noch keine Artikel im Keller.<br>Leg mit "+ Artikel hinzufügen" den ersten an.</div>`;
   } else {
-    listEl.innerHTML = items.map(renderTag).join('');
+    listEl.innerHTML = sorted.map(renderTag).join('');
   }
 
-  const lowCount = items.filter(isLow).length;
-  subtitleEl.innerHTML = items.length + ' Artikel' +
+  const lowCount = sorted.filter(isLow).length;
+  subtitleEl.innerHTML = sorted.length + ' Artikel' +
     (lowCount > 0 ? ` · <strong>${lowCount} knapp</strong>` : '');
 
-  attachListeners(items);
+  attachListeners(sorted);
+}
+
+/** Knappe Artikel zuerst (als Gruppe), innerhalb der Gruppen alphabetisch. */
+function sortItems(items) {
+  return [...items].sort((a, b) => {
+    const lowDiff = (isLow(a) ? 0 : 1) - (isLow(b) ? 0 : 1);
+    if (lowDiff !== 0) return lowDiff;
+    return a.name.localeCompare(b.name, 'de');
+  });
 }
 
 function isLow(item) {
@@ -29,27 +43,41 @@ function isLow(item) {
 
 function renderTag(item) {
   const low = isLow(item);
+  const expanded = expandedIds.has(item.id);
   const pct = item.min > 0 ? Math.min(100, Math.round((item.qty / (item.min * 2)) * 100)) : 100;
+
   return `
-    <div class="tag ${low ? 'low' : ''}" data-id="${item.id}">
-      <div class="tag-top" data-action="edit">
-        <div>
-          <div class="name">${escapeHtml(item.name)}</div>
-          <div class="unit">${item.min > 0 ? 'min. ' + item.min + ' ' + escapeHtml(item.unit) : escapeHtml(item.unit)}</div>
+    <div class="tag ${low ? 'low' : ''} ${expanded ? 'expanded' : ''}" data-id="${item.id}">
+      <div class="tag-header" data-action="toggle">
+        <div class="header-left">
+          <span class="chevron">▸</span>
+          <span class="name">${escapeHtml(item.name)}</span>
         </div>
-        <button class="del-btn" data-action="delete">✕</button>
+        <div class="header-right">
+          ${low ? '<span class="low-dot">⚠</span>' : ''}
+          <span class="qty-compact">${item.qty} ${escapeHtml(item.unit)}</span>
+        </div>
       </div>
-      <div class="tag-controls">
-        <button class="stepper minus" data-action="minus">−</button>
-        <div class="qty-wrap">
-          <div class="qty-row">
-            <span class="qty">${item.qty}</span>
-            <span class="qty-label">${escapeHtml(item.unit)}</span>
+      <div class="tag-body">
+        <div class="tag-meta">
+          <span>${item.min > 0 ? 'min. ' + item.min + ' ' + escapeHtml(item.unit) : 'kein Mindestbestand'}</span>
+          <div class="tag-meta-actions">
+            <button class="icon-btn" data-action="edit" aria-label="Bearbeiten">✎</button>
+            <button class="icon-btn" data-action="delete" aria-label="Löschen">✕</button>
           </div>
-          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-          ${low ? '<div class="low-flag">⚠ Nachkaufen</div>' : ''}
         </div>
-        <button class="stepper plus" data-action="plus">+</button>
+        <div class="tag-controls">
+          <button class="stepper minus" data-action="minus">−</button>
+          <div class="qty-wrap">
+            <div class="qty-row">
+              <span class="qty">${item.qty}</span>
+              <span class="qty-label">${escapeHtml(item.unit)}</span>
+            </div>
+            <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+            ${low ? '<div class="low-flag">⚠ Nachkaufen</div>' : ''}
+          </div>
+          <button class="stepper plus" data-action="plus">+</button>
+        </div>
       </div>
     </div>`;
 }
@@ -65,11 +93,21 @@ function attachListeners(items) {
     const id = Number(tagEl.dataset.id);
     const item = items.find((it) => it.id === id);
 
-    tagEl.querySelector('[data-action="minus"]').addEventListener('click', async () => {
+    tagEl.querySelector('[data-action="toggle"]').addEventListener('click', () => {
+      if (expandedIds.has(id)) {
+        expandedIds.delete(id);
+      } else {
+        expandedIds.add(id);
+      }
+      render();
+    });
+    tagEl.querySelector('[data-action="minus"]').addEventListener('click', async (e) => {
+      e.stopPropagation();
       await VorratsDB.changeQty(id, -1);
       render();
     });
-    tagEl.querySelector('[data-action="plus"]').addEventListener('click', async () => {
+    tagEl.querySelector('[data-action="plus"]').addEventListener('click', async (e) => {
+      e.stopPropagation();
       await VorratsDB.changeQty(id, 1);
       render();
     });
@@ -77,7 +115,8 @@ function attachListeners(items) {
       e.stopPropagation();
       askDelete(item);
     });
-    tagEl.querySelector('[data-action="edit"]').addEventListener('click', () => {
+    tagEl.querySelector('[data-action="edit"]').addEventListener('click', (e) => {
+      e.stopPropagation();
       openEditForm(item);
     });
   });
