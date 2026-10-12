@@ -95,7 +95,8 @@ const VorratsDB = {
       createdAt: now,
       updatedAt: now,
     };
-    return withStore('readwrite', (store) => store.add(record));
+    const req = await withStore('readwrite', (store) => store.add(record));
+    return req.result;
   },
 
   /** Bestehenden Artikel vollständig aktualisieren (z. B. nach Bearbeiten-Formular). */

@@ -4,7 +4,7 @@
  * nur die statischen Dateien (HTML/CSS/JS/Icons).
  */
 
-const CACHE_NAME = 'vorratskeller-v2';
+const CACHE_NAME = 'vorratskeller-v4';
 const APP_SHELL = [
   './',
   './index.html',
@@ -34,8 +34,26 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Netzwerk zuerst für die ZXing-CDN-Datei, sonst Cache-first für die App-Shell.
-  if (event.request.url.includes('unpkg.com')) return;
+  const url = event.request.url;
+
+  // Schrift (Urbanist): aus dem Cache anzeigen und im Hintergrund auffrischen,
+  // damit sie auch im Keller ohne Netz da ist.
+  if (url.includes('fonts.googleapis.com') || url.includes('fonts.gstatic.com')) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.match(event.request).then((cached) => {
+          const fresh = fetch(event.request)
+            .then((res) => { cache.put(event.request, res.clone()); return res; })
+            .catch(() => cached);
+          return cached || fresh;
+        })
+      )
+    );
+    return;
+  }
+
+  // ZXing-CDN-Datei direkt aus dem Netz, sonst Cache-first für die App-Shell.
+  if (url.includes('unpkg.com')) return;
 
   event.respondWith(
     caches.match(event.request).then((cached) => cached || fetch(event.request))

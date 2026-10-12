@@ -9,11 +9,21 @@ const subtitleEl = document.getElementById('subtitle');
 // damit ein Artikel nach +/- nicht wieder zuklappt.
 const expandedIds = new Set();
 
+// Eingefrorene Reihenfolge der Artikel-IDs. Wird nur beim App-Start, nach längerer
+// Pause im Hintergrund oder beim Hinzufügen neuer Artikel angepasst — NICHT bei +/-
+// oder Bearbeiten. So springt ein Artikel nicht weg, wenn sich sein "knapp"-Status ändert.
+let orderIds = null;
+let hiddenSince = null;
+const RESORT_AFTER_MS = 5 * 60 * 1000;
+
+// Artikel, der nach dem nächsten render() sichtbar gemacht und kurz hervorgehoben wird.
+let focusId = null;
+
 // --- Rendering ---------------------------------------------------------
 
 async function render() {
   const items = await VorratsDB.getAll();
-  const sorted = sortItems(items);
+  const sorted = applyOrder(items);
 
   if (sorted.length === 0) {
     listEl.innerHTML = `<div class="empty-state">Noch keine Artikel im Keller.<br>Leg mit "+ Artikel hinzufügen" den ersten an.</div>`;
@@ -26,15 +36,48 @@ async function render() {
     (lowCount > 0 ? ` · <strong>${lowCount} knapp</strong>` : '');
 
   attachListeners(sorted);
+
+  if (focusId !== null) {
+    const el = listEl.querySelector(`.tag[data-id="${focusId}"]`);
+    focusId = null;
+    if (el) {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      el.classList.add('flash');
+    }
+  }
+}
+
+/**
+ * Wendet die eingefrorene Reihenfolge an. Neue Artikel werden an der Stelle
+ * einsortiert, an die sie nach den normalen Regeln gehören; alle anderen bleiben stehen.
+ */
+function applyOrder(items) {
+  const byId = new Map(items.map((it) => [it.id, it]));
+
+  if (!orderIds) {
+    orderIds = sortItems(items).map((it) => it.id);
+  } else {
+    orderIds = orderIds.filter((id) => byId.has(id));
+    const known = new Set(orderIds);
+    const fresh = items.filter((it) => !known.has(it.id)).sort(compareItems);
+    for (const it of fresh) {
+      const idx = orderIds.findIndex((id) => compareItems(it, byId.get(id)) < 0);
+      if (idx === -1) orderIds.push(it.id);
+      else orderIds.splice(idx, 0, it.id);
+    }
+  }
+  return orderIds.map((id) => byId.get(id));
 }
 
 /** Knappe Artikel zuerst (als Gruppe), innerhalb der Gruppen alphabetisch. */
+function compareItems(a, b) {
+  const lowDiff = (isLow(a) ? 0 : 1) - (isLow(b) ? 0 : 1);
+  if (lowDiff !== 0) return lowDiff;
+  return a.name.localeCompare(b.name, 'de');
+}
+
 function sortItems(items) {
-  return [...items].sort((a, b) => {
-    const lowDiff = (isLow(a) ? 0 : 1) - (isLow(b) ? 0 : 1);
-    if (lowDiff !== 0) return lowDiff;
-    return a.name.localeCompare(b.name, 'de');
-  });
+  return [...items].sort(compareItems);
 }
 
 function isLow(item) {
@@ -50,12 +93,12 @@ function renderTag(item) {
     <div class="tag ${low ? 'low' : ''} ${expanded ? 'expanded' : ''}" data-id="${item.id}">
       <div class="tag-header" data-action="toggle">
         <div class="header-left">
-          <span class="chevron">▸</span>
           <span class="name">${escapeHtml(item.name)}</span>
+          ${low ? '<span class="badge">Knapp</span>' : ''}
         </div>
         <div class="header-right">
-          ${low ? '<span class="low-dot">⚠</span>' : ''}
-          <span class="qty-compact">${item.qty} ${escapeHtml(item.unit)}</span>
+          <span class="qty-compact">${item.qty}<small>${escapeHtml(item.unit)}</small></span>
+          <span class="chevron">▸</span>
         </div>
       </div>
       <div class="tag-body">
@@ -74,7 +117,6 @@ function renderTag(item) {
               <span class="qty-label">${escapeHtml(item.unit)}</span>
             </div>
             <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
-            ${low ? '<div class="low-flag">⚠ Nachkaufen</div>' : ''}
           </div>
           <button class="stepper plus" data-action="plus">+</button>
         </div>
@@ -176,9 +218,11 @@ document.getElementById('btnSaveItem').addEventListener('click', async () => {
   };
 
   if (editId.value) {
-    await VorratsDB.update(Number(editId.value), payload);
+    focusId = Number(editId.value);
+    await VorratsDB.update(focusId, payload);
   } else {
-    await VorratsDB.add(payload);
+    focusId = await VorratsDB.add(payload);
+    expandedIds.add(focusId);
   }
 
   closeAddForm();
@@ -248,6 +292,17 @@ document.getElementById('btnScan').addEventListener('click', openScanForm);
 document.getElementById('btnCancelScan').addEventListener('click', closeScanForm);
 
 // --- Start -----------------------------------------------------------------
+
+// Kommt die App nach längerer Pause zurück in den Vordergrund, wird neu sortiert
+// (knappe Artikel wieder oben), ohne dass die App neu geladen werden muss.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    hiddenSince = Date.now();
+  } else if (hiddenSince && Date.now() - hiddenSince > RESORT_AFTER_MS) {
+    orderIds = null;
+    render();
+  }
+});
 
 render();
 
